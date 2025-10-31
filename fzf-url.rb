@@ -1,78 +1,45 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'English'
 require 'shellwords'
-
-def executable(*commands)
-  commands.find do |c|
-    `command -v #{c.split.first}`.empty?.!
-  end
-end
 
 def halt(message)
   system "tmux display-message #{Shellwords.escape(message)}"
   exit
 end
 
-def with(command)
-  io = IO.popen(command, 'r+')
-  begin
-    stdout = $stdout
-    $stdout = io
-    begin
-      yield
-    rescue Errno::EPIPE
-      nil
-    end
-  ensure
-    $stdout = stdout
-  end
-  io.close_write
-  io.readlines.map(&:chomp)
-end
-
-# TODO: Keep it simple for now
 def extract_urls(line)
   line.scan(%r{(?:https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=]+[-a-zA-Z0-9@%_+.~#?&/=!]+}x)
 end
 
+# 获取终端内容
 lines = `tmux capture-pane -J -p -S -99999`
 urls = lines.each_line.map(&:strip).reject(&:empty?)
             .flat_map { |l| extract_urls(l) }.reverse.uniq
 halt 'No URLs found' if urls.empty?
 
-header = 'Press CTRL-Y to copy URL to clipboard'
+# fzf 选择
+header = 'CTRL-Y: Copy to Windows clipboard | ENTER: Open in Windows'
 max_size = `tmux display-message -p "\#{client_width} \#{client_height}"`.split.map(&:to_i)
-size = [[*urls, header].map(&:length).max + 2 + 4 + 2, urls.length + 5 + 1 + 1].zip(max_size).map(&:min).join(',')
-opts = ['--tmux', size, '--multi', '--no-margin', '--no-padding', '--wrap',
-        '--expect', 'ctrl-y', '--style', 'default',
-        '--header', header, '--header-border', 'top',
-        '--highlight-line', '--header-first', '--info', 'inline-right',
-        '--padding', '1,1,0,1',
-        '--border-label', ' URLs '].map(&:shellescape).join(' ')
-selected = with("fzf #{opts}") do
-  puts urls
+size = [[*urls, header].map(&:length).max + 2, urls.length + 5].zip(max_size).map(&:min).join(',')
+
+selected = IO.popen("fzf --tmux #{size} --multi --expect ctrl-y --header #{Shellwords.escape(header)}", 'r+') do |io|
+  urls.each { |url| io.puts url }
+  io.close_write
+  io.readlines.map(&:chomp)
 end
+
 exit if selected.length < 2
 
 if selected.first == 'ctrl-y'
-  # https://superuser.com/questions/288320/whats-like-osxs-pbcopy-for-linux
-  copier = executable('reattach-to-user-namespace pbcopy',
-                      'pbcopy',
-                      'wl-copy',
-                      'xsel --clipboard --input',
-                      'xclip -selection clipboard')
-  halt 'No command to control clipboard with' unless copier
-  with(copier) do
-    print selected.drop(1).join($RS).strip
+  # 复制到 Windows 剪贴板
+  text = selected.drop(1).join("\n")
+  system("echo #{Shellwords.escape(text)} | clip.exe")
+  halt '✓ Copied to Windows clipboard'
+else
+  # 在 Windows 中打开 URL
+  selected.drop(1).each do |url|
+    system("cmd.exe /c start #{Shellwords.escape(url)}")
   end
-  halt 'Copied to clipboard'
-end
-
-opener = executable('open', 'xdg-open')
-opener = 'nohup xdg-open' if opener == 'xdg-open'
-halt 'No command to open URL with' unless opener
-selected.drop(1).each do |url|
-  system "#{opener} #{Shellwords.escape(url)} &> /dev/null"
+  halt "✓ Opened #{selected.drop(1).length} URL(s) in Windows"
 end
