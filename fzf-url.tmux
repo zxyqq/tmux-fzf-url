@@ -14,4 +14,4 @@ conf() {
 
 key="$(conf @fzf-url-bind u)"
 
-tmux bind-key "$key" run -b "$SCRIPT_DIR/fzf-url.rb";
+tmux bind-key "$key" run -b "$SCRIPT_DIR/fzf-url.sh";
